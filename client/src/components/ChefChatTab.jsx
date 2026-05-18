@@ -4,7 +4,11 @@ import { chatAI } from "../api";
 function buildSystemPrompt(data) {
   const pantry = data.pantry.length
     ? data.pantry
-        .map((p) => `${p.name} (${p.quantity} ${p.unit})`)
+        .map((p) => {
+          let extra = "";
+          if (p.expiryDate) extra = `, expires ${p.expiryDate}`;
+          return `${p.name} (${p.quantity} ${p.unit}${extra})`;
+        })
         .join(", ")
     : "empty";
 
@@ -12,8 +16,24 @@ function buildSystemPrompt(data) {
     ? data.recipes.map((r) => r.name).join(", ")
     : "none saved";
 
-  return `You are a personal chef's assistant. The user's current pantry contains: ${pantry}. Their saved recipes are: ${recipes}. Help them decide what to cook, suggest substitutions, plan meals, and answer any food-related questions. Be warm, practical, and concise.`;
+  const mealPlan = (data.mealPlan?.days || [])
+    .map((id, i) => {
+      if (!id) return null;
+      const r = data.recipes.find((rec) => rec.id === id);
+      return r ? `Day ${i + 1}: ${r.name}` : null;
+    })
+    .filter(Boolean)
+    .join("; ");
+
+  return `You are a personal chef's assistant. The user's current pantry contains: ${pantry}. Their saved recipes are: ${recipes}.${mealPlan ? ` This week's meal plan: ${mealPlan}.` : ""} Help them decide what to cook, suggest substitutions for missing ingredients using pantry items, plan meals, and answer food questions. Be warm, practical, and concise.`;
 }
+
+const QUICK_PROMPTS = [
+  "What can I make with what's in my pantry?",
+  "I'm missing an ingredient — suggest a substitute",
+  "Plan dinners for this week with my pantry",
+  "What should I use up before it expires?",
+];
 
 export default function ChefChatTab({ data }) {
   const [messages, setMessages] = useState([
@@ -28,9 +48,7 @@ export default function ChefChatTab({ data }) {
   const [error, setError] = useState(null);
   const bottomRef = useRef(null);
 
-  const send = async (e) => {
-    e.preventDefault();
-    const text = input.trim();
+  const sendMessage = async (text) => {
     if (!text || loading) return;
 
     const userMsg = { role: "user", content: text };
@@ -61,8 +79,29 @@ export default function ChefChatTab({ data }) {
     }
   };
 
+  const send = (e) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    sendMessage(text);
+  };
+
   return (
     <div className="flex h-[calc(100dvh-220px)] min-h-[400px] flex-col">
+      <div className="mb-3 flex flex-wrap gap-2">
+        {QUICK_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={loading}
+            onClick={() => sendMessage(prompt)}
+            className="rounded-full border border-[var(--color-kitchen-border)] px-3 py-1 text-[11px] text-[var(--color-kitchen-muted)] transition hover:border-[var(--color-kitchen-amber)] hover:text-[var(--color-kitchen-amber)] disabled:opacity-50"
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
       <div className="flex-1 space-y-3 overflow-y-auto pb-4">
         {messages.map((msg, i) => (
           <div

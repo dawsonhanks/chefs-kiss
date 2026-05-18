@@ -19,3 +19,24 @@ export async function parseRecipeUrl(url) {
   if (!res.ok) throw new Error(json.error || "Recipe parse failed");
   return json.recipe;
 }
+
+export async function suggestSubstitutions(recipe, missing, pantry) {
+  const pantryList = pantry.length
+    ? pantry.map((p) => `${p.name} (${p.quantity} ${p.unit})`).join(", ")
+    : "empty";
+
+  const missingList = missing
+    .map((m) => `${m.quantity} ${m.unit} ${m.name}`)
+    .join(", ");
+
+  const system = `You are a practical home cooking assistant. The user's pantry contains: ${pantryList}.
+For the recipe "${recipe.name}", they are missing: ${missingList}.
+Suggest 2–3 realistic substitutions per missing ingredient using what they likely have or common pantry staples.
+Be concise: use a short bullet list. Mention if they can skip an ingredient. No preamble.`;
+
+  const reply = await chatAI(
+    [{ role: "user", content: "What substitutions can I use?" }],
+    system
+  );
+  return reply.content;
+}

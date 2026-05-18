@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DRIVE_FILE_NAME, DRIVE_SCOPE, EMPTY_DATA } from "../utils/constants";
+import {
+  DRIVE_FILE_NAME,
+  DRIVE_SCOPE,
+  EMPTY_DATA,
+  HOUSEHOLD_FILE_ID_KEY,
+  PENDING_JOIN_KEY,
+  SYNC_INTERVAL_MS,
+} from "../utils/constants";
 import { STARTER_RECIPES } from "../data/starterRecipes";
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
@@ -14,8 +21,60 @@ function mergeWithStarters(data) {
     recipes: mergedRecipes,
     shoppingList: data.shoppingList || [],
     cookHistory: data.cookHistory || [],
+    mealPlan: data.mealPlan?.days
+      ? data.mealPlan
+      : { weekStart: null, days: [null, null, null, null, null, null, null] },
   };
 }
+
+function getHouseholdFileId() {
+  try {
+    return localStorage.getItem(HOUSEHOLD_FILE_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setHouseholdFileId(id) {
+  try {
+    if (id) localStorage.setItem(HOUSEHOLD_FILE_ID_KEY, id);
+    else localStorage.removeItem(HOUSEHOLD_FILE_ID_KEY);
+  } catch {
+    /* private browsing */
+  }
+}
+
+function parseJoinInput(input) {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    const join = url.searchParams.get("join");
+    if (join) return join;
+  } catch {
+    /* not a URL */
+  }
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+function captureJoinFromUrl() {
+  if (typeof window === "undefined") return;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const join = params.get("join");
+    if (join) {
+      sessionStorage.setItem(PENDING_JOIN_KEY, join);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("join");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+captureJoinFromUrl();
 
 async function driveRequest(accessToken, path, options = {}) {
   const res = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
@@ -38,10 +97,18 @@ async function findDataFile(accessToken) {
   );
   const res = await driveRequest(
     accessToken,
-    `/files?q=${q}&spaces=drive&fields=files(id,name)`
+    `/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)`
   );
   const { files } = await res.json();
   return files[0] || null;
+}
+
+async function getFileMetadata(accessToken, fileId) {
+  const res = await driveRequest(
+    accessToken,
+    `/files/${fileId}?fields=id,name,modifiedTime`
+  );
+  return res.json();
 }
 
 async function downloadFile(accessToken, fileId) {
@@ -100,6 +167,16 @@ async function updateFile(accessToken, fileId, content) {
   }
 }
 
+function buildSavePayload(toSave) {
+  return {
+    pantry: toSave.pantry,
+    recipes: toSave.recipes.filter((r) => r.source !== "starter"),
+    shoppingList: toSave.shoppingList,
+    cookHistory: toSave.cookHistory,
+    mealPlan: toSave.mealPlan,
+  };
+}
+
 function formatOAuthError(response) {
   const desc = response.error_description || "";
   const isOriginMismatch =
@@ -127,39 +204,112 @@ export function useGoogleDrive() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState(null);
+  const [joinError, setJoinError] = useState(null);
   const [signedIn, setSignedIn] = useState(false);
   const [gisReady, setGisReady] = useState(false);
+  const [isSharedKitchen, setIsSharedKitchen] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const tokenClientRef = useRef(null);
   const saveTimeoutRef = useRef(null);
   const pendingDataRef = useRef(null);
+  const lastModifiedRef = useRef(null);
+  const savingRef = useRef(false);
+  const fileIdRef = useRef(null);
+  const accessTokenRef = useRef(null);
 
-  const loadFromDrive = useCallback(async (token) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const file = await findDataFile(token);
-      let parsed;
-
-      if (file) {
-        parsed = await downloadFile(token, file.id);
-        setFileId(file.id);
-      } else {
-        parsed = { ...EMPTY_DATA, recipes: STARTER_RECIPES };
-        const newId = await createFile(token, parsed);
-        setFileId(newId);
-      }
-
-      setData(mergeWithStarters(parsed));
-      setSignedIn(true);
-    } catch (err) {
-      setError(err.message);
-      setSignedIn(false);
-      setData(mergeWithStarters(EMPTY_DATA));
-    } finally {
-      setLoading(false);
-    }
+  const applyLoadedFile = useCallback((parsed, id, modifiedTime) => {
+    setFileId(id);
+    fileIdRef.current = id;
+    lastModifiedRef.current = modifiedTime || null;
+    setData(mergeWithStarters(parsed));
+    setLastSyncedAt(new Date());
+    setIsSharedKitchen(Boolean(getHouseholdFileId()));
   }, []);
+
+  const loadFileById = useCallback(async (token, id) => {
+    const meta = await getFileMetadata(token, id);
+    const parsed = await downloadFile(token, id);
+    applyLoadedFile(parsed, id, meta.modifiedTime);
+    return id;
+  }, [applyLoadedFile]);
+
+  const loadFromDrive = useCallback(
+    async (token, options = {}) => {
+      const { joinId } = options;
+      setLoading(true);
+      setError(null);
+      setJoinError(null);
+
+      try {
+        const householdId = joinId || getHouseholdFileId();
+
+        if (householdId) {
+          try {
+            await loadFileById(token, householdId);
+            setHouseholdFileId(householdId);
+            setSignedIn(true);
+            return;
+          } catch {
+            if (joinId) {
+              throw new Error(
+                "Could not access this kitchen. Ask your partner to share chefs-assistant-data.json with your Google email as Editor in Google Drive, then try again."
+              );
+            }
+            setHouseholdFileId(null);
+          }
+        }
+
+        const file = await findDataFile(token);
+        let parsed;
+
+        if (file) {
+          parsed = await downloadFile(token, file.id);
+          applyLoadedFile(parsed, file.id, file.modifiedTime);
+        } else {
+          parsed = { ...EMPTY_DATA, recipes: STARTER_RECIPES };
+          const newId = await createFile(token, buildSavePayload(parsed));
+          applyLoadedFile(parsed, newId, new Date().toISOString());
+        }
+
+        setSignedIn(true);
+      } catch (err) {
+        if (options.joinId) {
+          setJoinError(err.message);
+        } else {
+          setError(err.message);
+        }
+        setSignedIn(false);
+        setData(mergeWithStarters(EMPTY_DATA));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyLoadedFile, loadFileById]
+  );
+
+  const refreshFromDrive = useCallback(async () => {
+    const token = accessTokenRef.current;
+    const id = fileIdRef.current;
+    if (!token || !id || savingRef.current) return;
+
+    setSyncing(true);
+    try {
+      const meta = await getFileMetadata(token, id);
+      if (meta.modifiedTime === lastModifiedRef.current) {
+        setLastSyncedAt(new Date());
+        return;
+      }
+      const parsed = await downloadFile(token, id);
+      applyLoadedFile(parsed, id, meta.modifiedTime);
+      setError(null);
+    } catch (err) {
+      setError(`Sync failed: ${err.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }, [applyLoadedFile]);
 
   useEffect(() => {
     if (!CLIENT_ID) {
@@ -200,7 +350,22 @@ export function useGoogleDrive() {
             return;
           }
           setAccessToken(response.access_token);
-          await loadFromDrive(response.access_token);
+          accessTokenRef.current = response.access_token;
+
+          let pendingJoin = null;
+          try {
+            pendingJoin = sessionStorage.getItem(PENDING_JOIN_KEY);
+            if (pendingJoin) sessionStorage.removeItem(PENDING_JOIN_KEY);
+          } catch {
+            /* ignore */
+          }
+
+          if (pendingJoin) {
+            setHouseholdFileId(pendingJoin);
+            await loadFromDrive(response.access_token, { joinId: pendingJoin });
+          } else {
+            await loadFromDrive(response.access_token);
+          }
         },
       });
 
@@ -238,11 +403,57 @@ export function useGoogleDrive() {
       window.google.accounts.oauth2.revoke(accessToken, () => {});
     }
     setAccessToken(null);
+    accessTokenRef.current = null;
     setFileId(null);
+    fileIdRef.current = null;
     setSignedIn(false);
+    setIsSharedKitchen(false);
     setError(null);
+    setJoinError(null);
     setData(mergeWithStarters(EMPTY_DATA));
   }, [accessToken]);
+
+  const joinHousehold = useCallback(
+    async (input) => {
+      const id = parseJoinInput(input);
+      if (!id) {
+        setJoinError("Paste a valid invite link or file code.");
+        return;
+      }
+
+      if (!accessTokenRef.current) {
+        try {
+          sessionStorage.setItem(PENDING_JOIN_KEY, id);
+        } catch {
+          /* ignore */
+        }
+        signIn();
+        return;
+      }
+
+      setJoinError(null);
+      setLoading(true);
+      try {
+        setHouseholdFileId(id);
+        await loadFromDrive(accessTokenRef.current, { joinId: id });
+      } catch (err) {
+        setHouseholdFileId(null);
+        setJoinError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadFromDrive, signIn]
+  );
+
+  const leaveSharedKitchen = useCallback(async () => {
+    setHouseholdFileId(null);
+    setIsSharedKitchen(false);
+    setJoinError(null);
+    if (accessTokenRef.current) {
+      await loadFromDrive(accessTokenRef.current);
+    }
+  }, [loadFromDrive]);
 
   const updateData = useCallback((updater) => {
     setData((prev) => {
@@ -259,21 +470,21 @@ export function useGoogleDrive() {
 
     saveTimeoutRef.current = setTimeout(async () => {
       const toSave = pendingDataRef.current || data;
-      const payload = {
-        pantry: toSave.pantry,
-        recipes: toSave.recipes.filter((r) => r.source !== "starter"),
-        shoppingList: toSave.shoppingList,
-        cookHistory: toSave.cookHistory,
-      };
+      const payload = buildSavePayload(toSave);
 
       setSaving(true);
+      savingRef.current = true;
       try {
         await updateFile(accessToken, fileId, payload);
+        const meta = await getFileMetadata(accessToken, fileId);
+        lastModifiedRef.current = meta.modifiedTime;
+        setLastSyncedAt(new Date());
         setError(null);
       } catch (err) {
         setError(`Save failed: ${err.message}`);
       } finally {
         setSaving(false);
+        savingRef.current = false;
       }
     }, 1000);
 
@@ -282,18 +493,42 @@ export function useGoogleDrive() {
     };
   }, [data, signedIn, accessToken, fileId]);
 
+  useEffect(() => {
+    if (!signedIn || !accessToken || !fileId) return;
+
+    const interval = setInterval(refreshFromDrive, SYNC_INTERVAL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshFromDrive();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [signedIn, accessToken, fileId, refreshFromDrive]);
+
   return {
     data,
     setData: updateData,
     loading,
     saving,
+    syncing,
     error,
+    joinError,
     signedIn,
     signIn,
     signOut,
     gisReady,
     driveEnabled: Boolean(CLIENT_ID),
     googleClientId: CLIENT_ID,
+    isSharedKitchen,
+    householdFileId: fileId,
+    joinHousehold,
+    leaveSharedKitchen,
+    refreshFromDrive,
+    lastSyncedAt,
     configHint: !CLIENT_ID
       ? "Create client/.env from client/.env.example (Vite ignores .env.example)."
       : null,

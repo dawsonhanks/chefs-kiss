@@ -117,3 +117,150 @@ export function ratingEmoji(value) {
   const map = { 1: "😐", 2: "🙂", 3: "😋", 4: "🤩" };
   return map[value] || "—";
 }
+
+export function getWeekStart(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
+export function formatWeekdayDate(weekStartIso, dayIndex) {
+  const d = new Date(weekStartIso + "T12:00:00");
+  d.setDate(d.getDate() + dayIndex);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function getPriorityPantryItems(pantry) {
+  return pantry
+    .map((item) => {
+      let reason = null;
+      let priority = 0;
+      if (isExpired(item.expiryDate)) {
+        reason = "expired";
+        priority = 4;
+      } else if (expiresSoon(item.expiryDate)) {
+        reason = "expires soon";
+        priority = 3;
+      } else if (pantryStatus(item) === "out") {
+        reason = "out of stock";
+        priority = 2;
+      } else if (pantryStatus(item) === "low") {
+        reason = "running low";
+        priority = 1;
+      }
+      return reason ? { item, reason, priority } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.priority - a.priority);
+}
+
+export function getUseItUpRecipes(recipes, pantry, limit = 5) {
+  const priority = getPriorityPantryItems(pantry);
+  if (!priority.length) return [];
+
+  const scored = recipes
+    .map((recipe) => {
+      const matched = [];
+      for (const { item, reason } of priority) {
+        const uses = recipe.ingredients.some((ing) => {
+          const m = findPantryMatch([item], ing.name);
+          return !!m;
+        });
+        if (uses) matched.push({ name: item.name, reason });
+      }
+      if (!matched.length) return null;
+      const { canMake } = checkRecipeIngredients(recipe, pantry);
+      return {
+        recipe,
+        matched,
+        score: matched.length + (canMake ? 2 : 0),
+        canMake,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, limit);
+}
+
+export function addItemsToShoppingList(shoppingList, items, source = null) {
+  const existing = new Set(shoppingList.map((s) => normalizeName(s.name)));
+  const newItems = [];
+
+  for (const item of items) {
+    const key = normalizeName(item.name);
+    if (existing.has(key)) continue;
+    existing.add(key);
+    newItems.push({
+      id: uid(),
+      name: item.name,
+      quantity: item.quantity,
+      unit: item.unit,
+      checked: false,
+      fromRecipe: source,
+    });
+  }
+
+  return [...shoppingList, ...newItems];
+}
+
+export function aggregateMealPlanShopping(recipes, mealPlan, pantry) {
+  const recipeIds = (mealPlan?.days || []).filter(Boolean);
+  const seen = new Set();
+  const aggregated = [];
+
+  for (const recipeId of recipeIds) {
+    const recipe = recipes.find((r) => r.id === recipeId);
+    if (!recipe) continue;
+    const { missing } = checkRecipeIngredients(recipe, pantry);
+    for (const ing of missing) {
+      const key = normalizeName(ing.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      aggregated.push({
+        name: ing.name,
+        quantity: ing.quantity,
+        unit: ing.unit,
+      });
+    }
+  }
+
+  return aggregated;
+}
+
+export function getRestockItems(pantry) {
+  return pantry
+    .filter((p) => {
+      const s = pantryStatus(p);
+      return s === "low" || s === "out";
+    })
+    .map((p) => ({
+      name: p.name,
+      quantity: Math.max(1, (p.lowThreshold ?? 1) * 2 - p.quantity),
+      unit: p.unit,
+    }));
+}
+
+export function parseStepTimer(step) {
+  const text = step.toLowerCase();
+  const minMatch = text.match(/(\d+)\s*(?:–|-)?\s*(\d+)?\s*(?:minutes?|mins?)\b/);
+  if (minMatch) {
+    const mins = Number(minMatch[2] || minMatch[1]);
+    return mins > 0 ? mins * 60 : null;
+  }
+  const secMatch = text.match(/(\d+)\s*(?:seconds?|secs?)\b/);
+  if (secMatch) {
+    const secs = Number(secMatch[1]);
+    return secs > 0 ? secs : null;
+  }
+  return null;
+}
+
+export function formatTimer(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${s}s`;
+}

@@ -4,6 +4,7 @@ import HistoryTab from "./components/HistoryTab";
 import PantryTab from "./components/PantryTab";
 import RecipesTab from "./components/RecipesTab";
 import ShoppingTab from "./components/ShoppingTab";
+import HouseholdPanel from "./components/HouseholdPanel";
 import TabNav from "./components/TabNav";
 import { useGoogleDrive } from "./hooks/useGoogleDrive";
 
@@ -22,6 +23,14 @@ export default function App() {
     configHint,
     gisReady,
     googleClientId,
+    isSharedKitchen,
+    householdFileId,
+    joinHousehold,
+    leaveSharedKitchen,
+    refreshFromDrive,
+    joinError,
+    syncing,
+    lastSyncedAt,
   } = useGoogleDrive();
 
   const siteOrigin =
@@ -96,6 +105,19 @@ export default function App() {
             {error}
           </p>
         )}
+        {signedIn && driveEnabled && (
+          <HouseholdPanel
+            signedIn={signedIn}
+            isSharedKitchen={isSharedKitchen}
+            householdFileId={householdFileId}
+            lastSyncedAt={lastSyncedAt}
+            syncing={syncing}
+            onJoin={joinHousehold}
+            onLeave={leaveSharedKitchen}
+            onRefresh={refreshFromDrive}
+            joinError={joinError}
+          />
+        )}
         {!signedIn && driveEnabled && (
           <div className="mt-3 rounded-lg border border-[var(--color-kitchen-border)] bg-[var(--color-kitchen-card)] p-3 text-xs text-[var(--color-kitchen-muted)]">
             <p className="font-medium text-[var(--color-kitchen-cream)]">
@@ -140,7 +162,9 @@ export default function App() {
       />
 
       <main className="pt-4">
-        {tab === "pantry" && <PantryTab data={data} setData={setData} />}
+        {tab === "pantry" && (
+          <PantryTab data={data} setData={setData} onTabChange={setTab} />
+        )}
         {tab === "recipes" && (
           <RecipesTab data={data} setData={setData} onTabChange={setTab} />
         )}

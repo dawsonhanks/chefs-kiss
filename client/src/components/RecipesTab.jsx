@@ -1,15 +1,42 @@
 import { useState } from "react";
-import { parseRecipeUrl } from "../api";
-import { checkRecipeIngredients, normalizeName, uid } from "../utils/helpers";
+import { parseRecipeUrl, suggestSubstitutions } from "../api";
+import CookMode from "./CookMode";
+import MealPlanSection from "./MealPlanSection";
+import UseItUpSection from "./UseItUpSection";
+import {
+  addItemsToShoppingList,
+  checkRecipeIngredients,
+  uid,
+} from "../utils/helpers";
 
 function RecipeCard({
   recipe,
   pantry,
   onAddMissing,
   onLogCooked,
+  onCookMode,
+  defaultExpanded = false,
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [subsLoading, setSubsLoading] = useState(false);
+  const [subsText, setSubsText] = useState(null);
+  const [subsError, setSubsError] = useState(null);
   const { results, missing, canMake } = checkRecipeIngredients(recipe, pantry);
+
+  const loadSubstitutions = async () => {
+    if (!missing.length) return;
+    setSubsLoading(true);
+    setSubsError(null);
+    setSubsText(null);
+    try {
+      const text = await suggestSubstitutions(recipe, missing, pantry);
+      setSubsText(text);
+    } catch (err) {
+      setSubsError(err.message);
+    } finally {
+      setSubsLoading(false);
+    }
+  };
 
   return (
     <article className="rounded-xl border border-[var(--color-kitchen-border)] bg-[var(--color-kitchen-card)] overflow-hidden">
@@ -25,7 +52,10 @@ function RecipeCard({
                 {recipe.name}
               </h3>
               {canMake && (
-                <span className="text-[var(--color-kitchen-success)]" title="All ingredients in pantry">
+                <span
+                  className="text-[var(--color-kitchen-success)]"
+                  title="All ingredients in pantry"
+                >
                   ✅
                 </span>
               )}
@@ -72,6 +102,33 @@ function RecipeCard({
             </p>
           )}
 
+          {!canMake && missing.length > 0 && (
+            <div className="rounded-lg border border-[var(--color-kitchen-border)] bg-[var(--color-kitchen-surface)] p-3">
+              <button
+                type="button"
+                onClick={loadSubstitutions}
+                disabled={subsLoading}
+                className="text-xs font-medium text-[var(--color-kitchen-amber)] hover:underline disabled:opacity-50"
+              >
+                {subsLoading
+                  ? "Finding substitutions…"
+                  : subsText
+                    ? "Refresh substitutions"
+                    : "Suggest substitutions"}
+              </button>
+              {subsError && (
+                <p className="mt-2 text-xs text-[var(--color-kitchen-danger)]">
+                  {subsError}
+                </p>
+              )}
+              {subsText && (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-kitchen-cream)]/90">
+                  {subsText}
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-kitchen-amber)]">
               Steps
@@ -84,6 +141,13 @@ function RecipeCard({
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onCookMode(recipe)}
+              className="rounded-lg bg-[var(--color-kitchen-amber)] px-3 py-1.5 text-xs font-semibold text-[#0f0f0f]"
+            >
+              Cook Mode
+            </button>
             {!canMake && (
               <button
                 type="button"
@@ -96,7 +160,7 @@ function RecipeCard({
             <button
               type="button"
               onClick={() => onLogCooked(recipe)}
-              className="rounded-lg bg-[var(--color-kitchen-amber)] px-3 py-1.5 text-xs font-semibold text-[#0f0f0f]"
+              className="rounded-lg border border-[var(--color-kitchen-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-kitchen-muted)] hover:text-[var(--color-kitchen-cream)]"
             >
               Log as Cooked
             </button>
@@ -112,31 +176,21 @@ export default function RecipesTab({ data, setData, onTabChange }) {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState(null);
   const [parsedRecipe, setParsedRecipe] = useState(null);
+  const [cookRecipe, setCookRecipe] = useState(null);
+  const [highlightRecipeId, setHighlightRecipeId] = useState(null);
 
   const addMissingToShopping = (recipe) => {
     const { missing } = checkRecipeIngredients(recipe, data.pantry);
     if (!missing.length) return;
 
-    setData((d) => {
-      const existing = new Set(
-        d.shoppingList.map((s) => normalizeName(s.name))
-      );
-      const newItems = missing
-        .filter((m) => !existing.has(normalizeName(m.name)))
-        .map((m) => ({
-          id: uid(),
-          name: m.name,
-          quantity: m.quantity,
-          unit: m.unit,
-          checked: false,
-          fromRecipe: recipe.name,
-        }));
-
-      return {
-        ...d,
-        shoppingList: [...d.shoppingList, ...newItems],
-      };
-    });
+    setData((d) => ({
+      ...d,
+      shoppingList: addItemsToShoppingList(
+        d.shoppingList,
+        missing,
+        recipe.name
+      ),
+    }));
     onTabChange?.("shopping");
   };
 
@@ -190,6 +244,17 @@ export default function RecipesTab({ data, setData, onTabChange }) {
 
   return (
     <div className="space-y-4">
+      <MealPlanSection
+        data={data}
+        setData={setData}
+        onGoShopping={() => onTabChange?.("shopping")}
+      />
+
+      <UseItUpSection
+        data={data}
+        onSelectRecipe={(id) => setHighlightRecipeId(id)}
+      />
+
       <section className="rounded-xl border border-[var(--color-kitchen-border)] bg-[var(--color-kitchen-card)] p-4">
         <h3 className="font-serif text-lg font-semibold text-[var(--color-kitchen-amber)]">
           Import Recipe from URL
@@ -267,9 +332,22 @@ export default function RecipesTab({ data, setData, onTabChange }) {
             pantry={data.pantry}
             onAddMissing={addMissingToShopping}
             onLogCooked={logCooked}
+            onCookMode={setCookRecipe}
+            defaultExpanded={recipe.id === highlightRecipeId}
           />
         ))}
       </div>
+
+      {cookRecipe && (
+        <CookMode
+          recipe={cookRecipe}
+          onClose={() => setCookRecipe(null)}
+          onLogCooked={(r) => {
+            logCooked(r);
+            setCookRecipe(null);
+          }}
+        />
+      )}
     </div>
   );
 }
