@@ -293,6 +293,7 @@ export function useGoogleDrive() {
     signOut,
     gisReady,
     driveEnabled: Boolean(CLIENT_ID),
+    googleClientId: CLIENT_ID,
     configHint: !CLIENT_ID
       ? "Create client/.env from client/.env.example (Vite ignores .env.example)."
       : null,

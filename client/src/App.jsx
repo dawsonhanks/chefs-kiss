@@ -21,7 +21,14 @@ export default function App() {
     driveEnabled,
     configHint,
     gisReady,
+    googleClientId,
   } = useGoogleDrive();
+
+  const siteOrigin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  const clientIdHint = googleClientId
+    ? `${googleClientId.slice(0, 12)}…${googleClientId.slice(-20)}`
+    : "NOT SET — add VITE_GOOGLE_CLIENT_ID on Netlify, then redeploy";
 
   if (loading || !data) {
     return (
@@ -90,15 +97,38 @@ export default function App() {
           </p>
         )}
         {!signedIn && driveEnabled && (
-          <div className="mt-2 space-y-1 text-xs text-[var(--color-kitchen-muted)]">
-            <p>Sign in to sync pantry, recipes, and history to Google Drive.</p>
-            <p>
-              If Google blocks sign-in, add this exact origin in Google Cloud →
-              Clients → Authorized JavaScript origins:{" "}
-              <code className="rounded bg-[var(--color-kitchen-card)] px-1.5 py-0.5 text-[var(--color-kitchen-amber)]">
-                {typeof window !== "undefined" ? window.location.origin : ""}
-              </code>
+          <div className="mt-3 rounded-lg border border-[var(--color-kitchen-border)] bg-[var(--color-kitchen-card)] p-3 text-xs text-[var(--color-kitchen-muted)]">
+            <p className="font-medium text-[var(--color-kitchen-cream)]">
+              Google Drive setup — match all 3 in Google Cloud
             </p>
+            <ol className="mt-2 list-decimal space-y-2 pl-4">
+              <li>
+                <span className="text-[var(--color-kitchen-cream)]">
+                  Authorized domain
+                </span>
+                : add{" "}
+                <code className="text-[var(--color-kitchen-amber)]">netlify.app</code>{" "}
+                (OAuth consent screen / Branding → Authorized domains)
+              </li>
+              <li>
+                <span className="text-[var(--color-kitchen-cream)]">
+                  JavaScript origin
+                </span>
+                : add{" "}
+                <code className="break-all text-[var(--color-kitchen-amber)]">
+                  {siteOrigin}
+                </code>
+              </li>
+              <li>
+                <span className="text-[var(--color-kitchen-cream)]">
+                  OAuth client ID
+                </span>{" "}
+                in this build:{" "}
+                <code className="break-all text-[var(--color-kitchen-amber)]">
+                  {clientIdHint}
+                </code>
+              </li>
+            </ol>
           </div>
         )}
       </header>
