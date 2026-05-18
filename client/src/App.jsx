@@ -90,9 +90,16 @@ export default function App() {
           </p>
         )}
         {!signedIn && driveEnabled && (
-          <p className="mt-2 text-xs text-[var(--color-kitchen-muted)]">
-            Sign in to sync pantry, recipes, and history to Google Drive.
-          </p>
+          <div className="mt-2 space-y-1 text-xs text-[var(--color-kitchen-muted)]">
+            <p>Sign in to sync pantry, recipes, and history to Google Drive.</p>
+            <p>
+              If Google blocks sign-in, add this exact origin in Google Cloud →
+              Clients → Authorized JavaScript origins:{" "}
+              <code className="rounded bg-[var(--color-kitchen-card)] px-1.5 py-0.5 text-[var(--color-kitchen-amber)]">
+                {typeof window !== "undefined" ? window.location.origin : ""}
+              </code>
+            </p>
+          </div>
         )}
       </header>
 
