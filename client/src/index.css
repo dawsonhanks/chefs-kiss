@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --color-kitchen-bg: #0f0f0f;
+  --color-kitchen-surface: #1a1814;
+  --color-kitchen-card: #242018;
+  --color-kitchen-border: #3d3428;
+  --color-kitchen-amber: #e8a838;
+  --color-kitchen-amber-dim: #b8842a;
+  --color-kitchen-cream: #f5ebe0;
+  --color-kitchen-muted: #9a8f7f;
+  --color-kitchen-danger: #e85d5d;
+  --color-kitchen-success: #6bc97a;
+  --color-kitchen-warning: #e8b84a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-kitchen-bg);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-kitchen-cream);
+  background: var(--color-kitchen-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.font-serif {
+  font-family: var(--font-serif);
+}
