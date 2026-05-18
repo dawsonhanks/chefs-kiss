@@ -1,6 +1,5 @@
-import { lazy, Suspense, useCallback, useState } from "react";
-
-const BarcodeScanner = lazy(() => import("./BarcodeScanner"));
+import { useCallback, useState } from "react";
+import BarcodeScanner from "./BarcodeScanner";
 import StatCard from "./StatCard";
 import { CATEGORIES, UNITS } from "../utils/constants";
 import {
@@ -78,7 +77,6 @@ export default function PantryTab({ data, setData, onTabChange }) {
   };
 
   const handleBarcodeScan = useCallback(async (code) => {
-    setShowScanner(false);
     setLookupState({ status: "loading" });
     setShowForm(true);
 
@@ -110,6 +108,8 @@ export default function PantryTab({ data, setData, onTabChange }) {
         status: "error",
         barcode: String(code).replace(/\D/g, ""),
       });
+    } finally {
+      setShowScanner(false);
     }
   }, []);
 
@@ -217,18 +217,10 @@ export default function PantryTab({ data, setData, onTabChange }) {
       </div>
 
       {showScanner && (
-        <Suspense
-          fallback={
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-kitchen-bg)]/95 text-sm text-[var(--color-kitchen-muted)]">
-              Starting camera…
-            </div>
-          }
-        >
-          <BarcodeScanner
-            onScan={handleBarcodeScan}
-            onClose={() => setShowScanner(false)}
-          />
-        </Suspense>
+        <BarcodeScanner
+          onScan={handleBarcodeScan}
+          onClose={() => setShowScanner(false)}
+        />
       )}
 
       {showForm && (
